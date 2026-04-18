@@ -1,3 +1,7 @@
+mod algos;
+mod runner;
+mod testvec;
+
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -162,16 +166,20 @@ static ALGOS: &[Algo] = &[
     },
 ];
 
+fn print_usage() {
+    println!("Usage:");
+    println!("  ./fips_tester alglist");
+    println!("  ./fips_tester download <algorithm|all>");
+    println!("  ./fips_tester test <algorithm|all>");
+}
+
 fn print_list() {
     println!("Available algorithms:");
     for a in ALGOS {
         println!("  {}", a.key);
     }
     println!();
-    println!("Usage:");
-    println!("  ./fips_tester list");
-    println!("  ./fips_tester download <algorithm>");
-    println!("  ./fips_tester download all");
+    print_usage();
 }
 
 fn eprintln_x_red(msg: &str) {
@@ -292,26 +300,20 @@ fn main() {
     let out_root = Path::new("testvectors");
 
     if args.len() < 2 {
-        print_list();
+        print_usage();
         return;
     }
 
     match args[1].as_str() {
-        "list" => {
+        "alglist" => {
             print_list();
         }
         "download" => {
             if args.len() < 3 {
-                // Requested: if only "download" is provided, show options.
-                print_list();
+                print_usage();
                 return;
             }
             let target = args[2].trim().to_ascii_lowercase();
-            if target == "list" {
-                // Convenience alias.
-                print_list();
-                return;
-            }
 
             if target == "all" {
                 let mut total = 0usize;
@@ -333,7 +335,7 @@ fn main() {
 
             let Some(algo) = find_algo(&target) else {
                 eprintln_x_red(&format!("Error: Unknown algorithm '{}'", target));
-                eprintln_x_red("Use './fips_tester list' to see available algorithms");
+                eprintln_x_red("Use './fips_tester alglist' to see available algorithms");
                 std::process::exit(2);
             };
 
@@ -342,9 +344,74 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        "test" => {
+            if args.len() < 3 {
+                print_usage();
+                return;
+            }
+            let target = args[2].trim().to_ascii_lowercase();
+
+            let out_root = Path::new("testvectors");
+
+            if target == "all" {
+                let mut any_failed = false;
+                for algo in ALGOS {
+                    let Some(tester) = algos::make_tester(algo.key) else {
+                        continue; // not yet implemented
+                    };
+                    let vec_dir = out_root.join(algo.folder);
+                    match tester.run(&vec_dir) {
+                        Ok(summary) => {
+                            if !summary.all_passed() {
+                                any_failed = true;
+                            }
+                            summary.print_result();
+                        }
+                        Err(e) => {
+                            eprintln_x_red(&format!(
+                                "Error running '{}': {}",
+                                algo.key, e
+                            ));
+                            any_failed = true;
+                        }
+                    }
+                }
+                if any_failed {
+                    std::process::exit(1);
+                }
+            } else {
+                let Some(algo) = find_algo(&target) else {
+                    eprintln_x_red(&format!("Error: Unknown algorithm '{}'", target));
+                    eprintln_x_red("Use './fips_tester alglist' to see available algorithms");
+                    std::process::exit(2);
+                };
+
+                let Some(tester) = algos::make_tester(algo.key) else {
+                    eprintln_x_red(&format!(
+                        "Error: no tester implemented yet for '{}'",
+                        algo.key
+                    ));
+                    std::process::exit(1);
+                };
+
+                let vec_dir = out_root.join(algo.folder);
+                match tester.run(&vec_dir) {
+                    Ok(summary) => {
+                        summary.print_result();
+                        if !summary.all_passed() {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln_x_red(&format!("Error: {}", e));
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
         other => {
             eprintln_x_red(&format!("Error: Unknown command '{}'", other));
-            eprintln_x_red("Use './fips_tester list' to see available algorithms");
+            eprintln_x_red("Use './fips_tester alglist' to see available algorithms");
             std::process::exit(2);
         }
     }
